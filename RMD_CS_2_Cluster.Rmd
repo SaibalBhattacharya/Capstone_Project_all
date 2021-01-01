@@ -1,0 +1,467 @@
+---
+title: "Capstone Project - Part 2"
+author: "Saibal Bhattacharya"
+date: "10/02/2020"
+output: html_document
+---
+# **1. Problem statement:** {#anchor}    
+
+The main question that this section of the capstone projects attempts to answer is:  
+
+Can highly ranked colleges/universities be identified using unsupervised machine learning algorithms? NOTE: Some of the criteria used for ranking are low admissions rate, high standardized test scores (75 percentile), high 4-year graduation rates.
+
+# **2. Data:** {#anchor}
+The dataset used for this capstone project is publicly available and was downloaded from https://public.tableau.com/en-us/s/resources.  
+
+The original data was compiled by the Integrated Postsecondary Education Data System (IPEDS). IPEDS serves as the primary source for data on colleges, universities, and technical and vocational postsecondary institutions in the United States, and it is part of the National Center for Education Statistics (NCES).  
+
+This dataset pertains to about 1534 US universities and colleges for the year 2013. It includes a host of information regarding institute name, location (state and geographic region), status (public or private not-for-profit), religiously affiliated (or not), historically black college (or not) and type of degrees offered. It also includes many undergraduate admission statistics (number of applications, admissions, yield), 25th and 75th percentile ACT and SAT scores, percent of freshmen submitting ACT and SAT scores, tuition and fees (from 2010 to 2014), in-state and out-of-state total price of attendance (2013-14),full- and part-time enrollment, ethnic/racial make-up, percent of in-state, out-of-state, international students, college endowment per FTE (full-time equvalent) enrollment, and percent of freshmen receiving various kinds of financial aid - local, federal, and institutional. Additionally, it also includes the graduation rate (for Bachelor's degree) over 4, 5, and 6 years.  
+
+Additionally, this dataset includes some date that are not related to undergraduates such as ethnic/racial makeup of graduate school and total enrollment numbers across the college/university. It also includes some estimated statistics about enrollment for freshmen, undergraduates, graduates, and full- and part-time students.
+
+## **2b. Focus on undergraduate data ** {#css_id}  
+All colleges/universities have undergraduate programs, but graduate programs vary in size and scope across colleges and universities. For this project, I, therefore, decided to focus on answering questions pertaining to the undergraduate program only.  
+
+Thus from the original dataset, I removed all data that didn't focus on undergraduates such as ethnic makeup of graduate programs, ethnic makeup of total enrollment (that included non-undergraduates). I also eliminated estimated enrollment numbers (total, undergraduate, and graduate), since the data base separately included (non-estimated) undergraduate enrollment data. I also excluded the number of degrees and certificates awarded (including Associate, Bachelor, Master's, Doctoral, post baccalaureate, post Master's, and various kinds of certificates) mainly because of large number of zero or missing values for these columns.     
+
+## **2c. Reference ** {#css_id}  
+Reference for the K-means cluster analysis code and workflow: http://uc-r.github.io/kmeans_clustering#elbow
+
+# **3. Procedural steps for K-means cluster analysis:** {#anchor}  
+
+  a. Load data  
+  b. Initial data processing  
+  c. Check for duplication of college/university name  
+  d. Create dummy variables for categorical variables  
+  e. Scale data  
+  f. Initial analysis - K-means clustering with two clusters  
+  g. Define optimal number of clusters  
+      i. Elbow method  
+      ii. Average Silhoutte method  
+      iii. Gap statistic method  
+  h. Final analysis - extracting results
+      i. Elbow method
+      ii.Gap analysis  
+  i. Summary statistics - compare highly selective colleges with others
+
+#### **Load library files:**
+```{r }
+library(tidyverse)  # data manipulation
+library(cluster)    # clustering algorithms
+library(factoextra) # clustering algorithms & visualization
+library(gridExtra)  # plot multiple charts for different k values
+library(doBy)       # required for summaryBy - calculate summary statistics
+library(caret)      #for on-hot encoding to generate dummy variables
+```
+
+#### **3a. Read in project data file**
+```{r }
+df1 <- read.csv("US_Univ_UG_shortnames.csv")
+```
+
+#### **3b. Initial data processing**
+```{r }
+#Check number of NAs in each column
+sapply(df1, function(x) sum(is.na(x)))
+nrow(df1)
+
+#Cull columns by name
+#Remove select columns - that have identifier info
+df2 <- df1[ , -which(names(df1) %in% c("ID_number","Yr", "ZIP", "County", "Longitude",
+                                       "Latitude"))]
+
+#Remove select columns - with large number of NA values
+#Clustering algorithm requirement - NA values can't be present in any column
+df3 <- df2[ , -which(names(df2) %in% c("P_1stUG_instate", "P_1stUG_outstate", "P_1stUG_foreign", "P_1stUG_resNA", "SATWrite_25", "SATWrite_75"))]
+
+#Remove rows with NA values in any column
+df4 <- df3[complete.cases(df3), ]
+nrow(df4)  #Rows without NA values = 1066
+
+#Check if any column has NA values
+sapply(df4, function(x) sum(is.na(x))) #None of the columns have any NA values
+```
+
+#### **3c. Check if university/college name is duplicated under Name column**  
+#####  University/college name will be used as row name, so can't have two rows with same name
+```{r }
+#Find all universities that have the same name
+df5 <- df4
+dupe = df5[,c('Name')] # select columns to check duplicates
+df6 <- df5[duplicated(dupe) | duplicated(dupe, fromLast=TRUE),] 
+#fromLast = TRUE option used as it returns TRUE only from the duplicate value on-wards
+
+#Extract all info about universities that have the same names
+df6b <- select(df6, Name, Relgious_y_n, State, Region, Status, HBCU, Urbanization, 
+               Type_of_univ)
+
+#Arrange universities in alphabetical order
+df6c <- df6b[order(df6b[,'Name']), ]
+
+#Display universities/colleges with same name
+df6d <- select(df6c, Name, State, Region)
+head(df6d, 13)
+```
+
+#### **Observation: Some universities may have same names but are located in different states**
+##### So universities are NOT duplicates - though their Names are same 
+```{r }
+#So create new column that combines Name and State - to make each entry unique
+df5$Name_State <- paste(df5$Name, '_', df5$State)
+
+#Check if all entries in Name_State column are unique - i.e., there are no duplicates
+length(unique(df5$Name_State)) == nrow(df5)
+#Returns TRUE if there are no duplicates
+
+#Name rows using contents of Name_State column
+df7 <- df5[,-57]
+rownames(df7) <- df5[,57]
+
+#Remove columns: Name and State 
+#Categorical variable State is removed - as Region carries this information 
+df8 <- df7[ , -which(names(df7) %in% c("Name", "State"))]
+```
+
+#### **3d. Create dummy variables - for categorical variables**
+##### Use one-hot function to create dummy variables 
+```{r }
+# For categorical variables - use one-hot to create dummy variables
+one_hot <- dummyVars(~ ., df8, fullRank = FALSE)
+df8_hot <- predict(one_hot, df8) %>% as.data.frame()
+
+#Change/shorten column names - make them easier to read
+df8b_hot <- df8_hot
+names(df8b_hot)[names(df8b_hot) == "Relgious_y_nNo"] <- "Religious_n"
+names(df8b_hot)[names(df8b_hot) == "Relgious_y_nYes"] <- "Religious_y"
+names(df8b_hot)[names(df8b_hot) == "RegionFar_West"] <- "Region_FarWest"
+names(df8b_hot)[names(df8b_hot) == "RegionGreat_Lakes"] <- "Region_GreatLakes"
+names(df8b_hot)[names(df8b_hot) == "RegionMid_East"] <- "Region_MidEast"
+names(df8b_hot)[names(df8b_hot) == "RegionNew_England"] <- "Region_NewEngland"
+names(df8b_hot)[names(df8b_hot) == "RegionPlains"] <- "Region_Plains"
+names(df8b_hot)[names(df8b_hot) == "RegionRocky_Mountains"] <- "Region_Rockies"
+names(df8b_hot)[names(df8b_hot) == "RegionSouth_East"] <- "Region_SouthEast"
+names(df8b_hot)[names(df8b_hot) == "RegionSouth_West"] <- "Region_SouthWest"
+names(df8b_hot)[names(df8b_hot) == "StatusPrivate not-for-profit"] <- "Private"
+names(df8b_hot)[names(df8b_hot) == "StatusPublic"] <- "Public"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationCity: Large"] <- "Urban_City_L"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationCity: Midsize"] <- "Urban_City_M"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationCity: Small"] <- "Urban_City_S"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationRural: Distant"] <- "Urban_Rural_D"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationRural: Fringe"] <- "Urban_Rural_F"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationRural: Remote"] <- "Urban_Rural_R"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationSuburb: Large"] <- "Urban_Suburb_L"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationSuburb: Midsize"] <- "Urban_Suburb_M"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationSuburb: Small"] <- "Urban_Suburb_S"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationTown: Distant"] <- "Urban_Town_D"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationTown: Fringe"] <- "Urban_Town_F"
+names(df8b_hot)[names(df8b_hot) == "UrbanizationTown: Remote"] <- "Urban_Town_R"
+names(df8b_hot)[names(df8b_hot) == "Type_of_univBS_&_Associate's"] <- "Univ_BS_Assoc"
+names(df8b_hot)[names(df8b_hot) == "Type_of_univBS_Arts_&_Sciences"] <- "Univ_BS_Arts_Sci"
+names(df8b_hot)[names(df8b_hot) == "Type_of_univBS_Diverse_fields"] <- "Univ_BS_Diverse"
+names(df8b_hot)[names(df8b_hot) == "Type_of_univDoctoral_Research"] <- "Univ_Doc_Res"
+names(df8b_hot)[names(df8b_hot) == "Type_of_univHigh_research_univ"] <- "Univ_High_Res"
+names(df8b_hot)[names(df8b_hot) == "Type_of_univMS_Large_program"] <- "Univ_MS_L"
+names(df8b_hot)[names(df8b_hot) == "Type_of_univMS_Medium_program"] <- "Univ_MS_M"
+names(df8b_hot)[names(df8b_hot) == "Type_of_univMS_Small_program"] <- "Univ_MS_S"
+names(df8b_hot)[names(df8b_hot) == "Type_of_univVery_High_research_univ"] <- "Univ_vHigh_Res"
+colnames(df8b_hot)
+```
+
+#### **3e. Data scaling**
+```{r }
+#Data must be standardized (i.e., scaled) to make variables comparable.
+#standardization: transforming variables so they have mean zero and standard deviation 1.
+#scaling/standardizing the data using the R function called "scale"
+#don’t want the clustering algorithm to depend to an arbitrary variable unit
+df9 <- scale(df8b_hot)
+```
+
+#### **3f. K-means clustering - Initial run with 2 clusters**
+##### 1st step - indicate the number of clusters (k) that will be generated in the final solution
+```{r }
+#Default - R software uses 10 as the default value for the maximum iterations for convergence
+#compute k-means in R with the "kmeans" function
+#will group the data into two clusters (centers = 2)
+#"nstart" option - attempts multiple initial configurations and reports on the best one
+# nstart = 25 - will generate 25 initial configurations
+k2 <- kmeans(df9, centers = 2, nstart = 25)
+str(k2)
+```
+
+#### **Observation **
+##### Output details:  
+###### **cluster:** A vector of integers (from 1:k) indicating the cluster to which each point is allocated.  
+###### **centers:** A matrix of cluster centers.  
+###### **totss:** The total sum of squares.  
+###### **withinss:** Vector of within-cluster sum of squares, one component per cluster.  
+###### **tot.withinss:** Total within-cluster sum of squares, i.e. sum(withinss).  
+###### **betweenss:** The between-cluster sum of squares, i.e. $totss-tot.withinss$.  
+###### **size:** The number of points in each cluster.  
+```{r }
+#View results by using fviz_cluster
+fviz_cluster(k2, data = df9)
+
+```
+
+#### **Results:**  
+##### Using two clusters results in grouping the universities/colleges into two groups, and it doesn't help to distinguish top universities from the rest.  
+##### Thus, need to use established techniques to determine the optimal number of clusters.
+
+#### **NOTE:**
+##### If there are more than two dimensions (variables) fviz_cluster will perform principal component analysis (PCA) and plot the data points according to the first two principal components that explain the majority of the variance.
+
+#### **3g. Define optimal number of clusters**
+##### 3 most popular methods to find optimal clusters: Elbow & Silhouette methods, Gap statistics
+
+#### **3g(i). Define optimal number of clusters - Elbow method**
+```{r }
+# Total intra-cluster variation (total within-cluster variation or total within-cluster sum of square) is minimized
+# The location of a bend (knee) in the plot is generally considered as an indicator of the appropriate number of clusters.
+
+set.seed(123)
+
+# function to compute total within-cluster sum of square 
+wss <- function(k) {
+  kmeans(df9, k, nstart = 10 )$tot.withinss
+}
+
+# Compute and plot wss for k = 1 to k = 15
+k.values <- 1:15
+
+# extract wss for 2-15 clusters
+wss_values <- map_dbl(k.values, wss)
+
+plot(k.values, wss_values,
+     type="b", pch = 19, frame = FALSE, 
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares")
+
+```
+
+#### **Results:**  
+##### 6 clusters appear to be optimum - as the (bend of) the knee occurs near it.
+
+#### **3g(ii). Define optimal number of clusters - Average Silhouette Method**
+```{r }
+#Average Silhouette Method - measures the quality of a clustering, i.e., 
+#how well each object lies within its cluster
+#A high average silhouette width indicates a good clustering
+#optimal number of clusters k is the one that maximizes the average silhouette 
+#over a range of possible values for k
+#Use the silhouette function in the cluster package to compuate the average silhouette width.
+avg_sil <- function(k) {
+  km.res <- kmeans(df9, centers = k, nstart = 25)
+  ss <- silhouette(km.res$cluster, dist(df9))
+  mean(ss[, 3])
+}
+
+# Compute and plot wss for k = 2 to k = 15
+k.values <- 2:15
+
+# extract avg silhouette for 2-15 clusters
+avg_sil_values <- map_dbl(k.values, avg_sil)
+
+plot(k.values, avg_sil_values,
+     type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters K",
+     ylab = "Average Silhouettes")
+
+```
+
+#### **Results:**   
+##### 2 clusters appear to be optimum, with 4 clusters coming in as second optimal number of clusters.  
+#### **3g(iii). Define optimal number of clusters - Gap Statistic Method**
+```{r }
+#The gap statistic compares the total intracluster variation for different values of k 
+#with their expected values under null reference distribution of the data 
+#(i.e. a distribution with no obvious clustering).
+#The reference dataset is generated using Monte Carlo simulations of the sampling process.
+#The estimate of the optimal clusters (Gapn(k)) will be the value that maximizes Gapn(k)
+#This means that the clustering structure is far away from the uniform distribution of points.
+
+#To compute the gap statistic method we can use the clusGap function 
+#which provides the gap statistic and standard error for an output.
+# Compute gap statistic
+set.seed(123)
+gap_stat <- clusGap(df9, FUN = kmeans, nstart = 25,
+                    K.max = 10, B = 50)
+
+# Print the result
+print(gap_stat, method = "firstmax")
+
+```
+
+#### **Results:**  
+##### The highest value for gap = 0.959 for cluster = 10, while 5 clusters result in gap = 0.919.  
+
+#### **NOTE:**  
+##### K.max can be increased to avoid convergence errors but run time slows down significantly.
+```{r }
+#visualize the results 
+fviz_gap_stat(gap_stat)
+```
+
+#### **Results:**  
+##### The highest value for gap = 0.959 for cluster = 10  
+
+#### **3h. Final analysis - extracting results**  
+
+#### **3h(i). Final analysis - extracting results using Elbow analysis**
+```{r }
+# The Elbow method suggests that 6 is the number of optimal clusters
+# perform the final analysis and extract the results using 6 clusters.
+# Compute k-means clustering with k = 6
+set.seed(123)
+final_Elbow <- kmeans(df9, 6, nstart = 25)
+
+#visualize the results using fviz_cluster
+fviz_cluster(final_Elbow, data = df9)
+
+#Find cluster of best university/colleges
+df9b <- as.data.frame(final_Elbow$cluster)
+head(df9b)
+
+```
+
+#### **Results:**  
+##### Top colleges/universities are all in cluster 5. Cluster 5 has 80 members.  
+
+#### **3h(ii). Final analysis - extracting results using Gap analysis**
+```{r }
+# Extract results based on Gap analysis results 
+# The Gap analysis indicates that 10 is the number of optimal clusters
+# Perform the final analysis and extract the results using 10 clusters.
+# Compute k-means clustering with k = 10
+set.seed(123)
+final_Gap <- kmeans(df9, 10, nstart = 25)
+
+#visualize the results using fviz_cluster
+fviz_cluster(final_Gap, data = df9)
+
+#Find cluster of best university/colleges
+df9c <- as.data.frame(final_Gap$cluster)
+head(df9c)
+
+```
+
+#### **Results:**    
+##### Top colleges are all in cluster 3. Cluster 3 has 80 members.
+##### So it seems that top colleges/universities are identified with equal effectiveness when using k = 6 (from Elbow analysis) or k = 10 (from Gap analysis).
+
+#### **3i. Summary statistics - compare clusters**    
+#####  Metrics chosen to compare clusters: ACTComp_75, SATRead_75, SATMath_75, P_admit, Gradrate_4yrs.  
+#####  Both Gap and Elbow analysis show that the cluster containing Ivy league colleges have 80 members.  
+#####  So 6 clusters (from Elbow analysis) are selected to comparison analysis.  
+#####  Higher number of clusters (like 10 from Gap Analysis) may cause some of the clusters to overlap.
+```{r }
+#Compare 6 clusters from Elbow analysis
+#Extract cluster number and row name - from Elbow analysis
+df10 <- as.data.frame(final_Elbow$cluster) 
+
+#Merge cluster number with original unscaled data
+#df8 - contains unscaled data (all numerical columns only)
+df11 <- merge(df10, df8, by="row.names", all=TRUE)
+
+#Rename column names
+df12 <- df11 %>% rename(Univ_Name = "Row.names", Cluster_no = "final_Elbow$cluster") #load library(dplyr) 
+
+#To compare using box and violin plots - convert Cluster_no into factor
+df12$Cluster_no <- as.factor(df12$Cluster_no)
+
+#Compare ACTComp_75 across clusters 
+summaryBy(ACTComp_75 ~ Cluster_no, data = df12,      #install library(doBy) 
+          FUN = list(mean, max, min, median, sd))
+
+e <- ggplot(df12, aes(x = Cluster_no, y = ACTComp_75))
+
+#Compare using box plots embedded within violin plots
+e + geom_violin(aes(fill = Cluster_no), trim = FALSE) + 
+  geom_boxplot(width = 0.2)+
+  scale_fill_manual(values = c("#00AFBB", "#E7B800", "#FC4E07", "#E495A5", "#ABB065",  
+                               "#FFFF00FF"))+
+  theme(legend.position = "none")
+
+```
+
+#### **Observations:**
+##### Cluster 5 (includes Ivy plus colleges/universities) - has highest ACT Composite 75 percentile scores
+
+```{r }
+#Compare SATRead_75 across clusters
+summaryBy(SATRead_75 ~ Cluster_no, data = df12,      
+          FUN = list(mean, max, min, median, sd))
+
+e <- ggplot(df12, aes(x = Cluster_no, y = SATRead_75))
+
+#Compare using box plots embedded within violin plots
+e + geom_violin(aes(fill = Cluster_no), trim = FALSE) + 
+  geom_boxplot(width = 0.2)+
+  scale_fill_manual(values = c("#00AFBB", "#E7B800", "#FC4E07", "#E495A5", "#ABB065",  
+                               "#FFFF00FF"))+
+  theme(legend.position = "none")
+
+```
+
+#### **Observations:**
+##### Cluster 5 (includes Ivy plus colleges/universities) - has highest SAT Reading 75 percentile scores
+
+```{r }
+#Compare SATMath_75 across clusters
+summaryBy(SATMath_75 ~ Cluster_no, data = df12,      
+          FUN = list(mean, max, min, median, sd))
+
+e <- ggplot(df12, aes(x = Cluster_no, y = SATMath_75))
+
+#Compare using box plots embedded within violin plots
+e + geom_violin(aes(fill = Cluster_no), trim = FALSE) + 
+  geom_boxplot(width = 0.2)+
+  scale_fill_manual(values = c("#00AFBB", "#E7B800", "#FC4E07", "#E495A5", "#ABB065",  
+                               "#FFFF00FF"))+
+  theme(legend.position = "none")
+
+```
+
+#### **Observations:**
+##### Cluster 5 (includes Ivy plus colleges/universities) - has highest SAT Math 75 percentile scores
+
+```{r }
+#Compare P_admit across clusters 
+summaryBy(P_admit ~ Cluster_no, data = df12,         
+          FUN = list(mean, max, min, median, sd))
+
+e <- ggplot(df12, aes(x = Cluster_no, y = P_admit))
+
+#Compare using box plots embedded within violin plots
+e + geom_violin(aes(fill = Cluster_no), trim = FALSE) + 
+  geom_boxplot(width = 0.2)+
+  scale_fill_manual(values = c("#00AFBB", "#E7B800", "#FC4E07", "#E495A5", "#ABB065",  
+                               "#FFFF00FF"))+
+  theme(legend.position = "none")
+
+```
+
+#### **Observations:**
+##### Cluster 5 (includes Ivy plus colleges/universities) - has the lowest admission rates
+
+```{r }
+#Compare Gradrate_4yrs across clusters 
+summaryBy(Gradrate_4yrs ~ Cluster_no, data = df12,    
+          FUN = list(mean, max, min, median, sd))
+
+e <- ggplot(df12, aes(x = Cluster_no, y = Gradrate_4yrs))
+
+#Compare using box plots embedded within violin plots
+e + geom_violin(aes(fill = Cluster_no), trim = FALSE) + 
+  geom_boxplot(width = 0.2)+
+  scale_fill_manual(values = c("#00AFBB", "#E7B800", "#FC4E07", "#E495A5", "#ABB065",  
+                               "#FFFF00FF"))+
+  theme(legend.position = "none")
+
+```
+
+#### **Observations:**
+##### Cluster 5 (includes Ivy plus colleges/universities) - has the highest 4-yr graduation rates
+
+# **Results:** {#anchor} 
+##### Cluster 5 stands out against all other cluster in terms of highest mean values for ACTComp_75, SATRead_75, SATMath_75, and Gradrate_4yrs. As expected, it has the lowest admissions rate P_admit.  
+#####  Thus, the K-means clustering algorithm is an effective tool to identify the best performning colleges/universities.

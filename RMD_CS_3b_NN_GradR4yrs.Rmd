@@ -1,0 +1,352 @@
+---
+title: "Capstone Project - Part 3b"
+author: "Saibal Bhattacharya"
+date: "9/26/2020"
+output: html_document
+---
+
+# **1. Problem statement:** {#anchor}    
+
+Part 3b demonstarted that when categorical variables are modeled using dummy variables, NN models using tanh activation function kept crashing due to convergence issues. Also, the variable importance plot generated from NN model with least test error and using logistic activation function ranked some questionable factors as drivers to affecting the graduation rate.     
+
+The question that this section of the capstone project attempts to answer is as follows:    
+
+Can Neural Network regression (without categorical variables) be used to identify features that affect the 4-yr graduation rate?
+
+# **2a. Data:** {#anchor}
+The dataset used for this capstone project is publicly available and was downloaded from https://public.tableau.com/en-us/s/resources.  
+
+The original data was compliled by the Integrated Postsecondary Education Data System (IPEDS). IPEDS serves as the primary source for data on colleges, universities, and technical and vocational postsecondary institutions in the United States, and it is part of the National Center for Education Statistics (NCES).  
+
+This dataset pertains to about 1534 US universities and colleges for the year 2013. It includes a host of information regarding insitute name, location (state and geographic region), status (public or private not-for-profit), religiously affiliated (or not), historically black college (or not) and type of degrees offered. It also includes many undergraduate admission statistics (number of applications, admissions, yield), 25th and 75th percentile ACT and SAT scores, percent of freshmen submitting ACT and SAT scores, tuition and fees (from 2010 to 2014), in-state and out-of-state total price of attendance (2013-14),full- and part-time enrollment, ethnic/racial make-up, percent of in-state, out-of-state, international students, college endowment per FTE (full-time equvalent) enrollment, and percent of freshmen receiving various kinds of financial aid - local, federal, and institutional. Additionally, it also includes the graduation rate (for Bachelor's degree) over 4, 5, and 6 years.  
+
+Additionally, this dataset includes some date that are not related to undergraduates such as ethnic/racial makeup of graduate school and total enrollment numbers across the college/university. It also includes some estimated statistics about enrollment for freshmen, undergraduates, graduates, and full- and part-time students.
+
+## **2b. Focus on undergraduate programs ** {#css_id}  
+All colleges/universities have undergraduate programs, but graduate programs vary in size and scope across colleges and universities. For this project, I, therefore, decided to focus on answering questions pertaining to the undergraduate program only.  
+
+Thus from the original dataset, I removed all data that didn't focus on undergraudates such as ethinic makeup of graduate programs, ethnic makeup of total enrollment (that included non-undergraduates).I also eliminated estimated enrollment numbers (total, undergraduate, and graduate), since the data base separately included (non-estimated) undergraduate enrollment data. I also excluded the number of degrees and certificates awarded (including Associate, Bachelor, Master's, Doctoral, post baccalaureate, post Master's, and various kinds of certificates) mainly because of large number of zero or missing values for these columns.
+
+## **2c. Focus on ACTComp scores** {#css_id}   
+The original dataset contains ACTComp_75 (75th percentile) and ACTComp_25 (25th percentile), SATMath_75, SATMath_25, SATRead_75, SATRead_25, SATWrite_75, and SATWrite_25. 
+
+The NN algorithm used in this project can't handle missing data (NAs) in any column.Thus, a decision had to made regarding whether to include all or some of these important inputs: ACTComp_75 (334 NAs), ACTComp_25 (334 NAs), SATMath_25 (351 NAs), SATMath_75 (351 NAs), SATRead_25 (364 NAs), SATRead_75 (364 NAs), SATWrite_25 (819 NAs), and SATWrite_75 (819 NAs). It was therefore easy to decide to exclude the SATWrite columns due to large number of NA values.Including ACTComp_75, ACTComp_25, SATMath_25, SATMath_75, SATRead_25, SATRead_75 resulted in 1061 cases while including only ACTComp_75, ACTComp_25 resulted in 1151 cases. The original dataset is a relatively small sample of 1534 cases (with NAs) for NN training and testing purposes. Thus, I decided to include only ACTComp_75, ACTComp_25 so that I could get as big a sample size to train and test. Moreover, ACTComp_25 showed strong linear correlation with SATMath_25 and SATRead_25, and ACTComp_75 showed strong linear correlation with SATMath_75 and SATRead_75.      
+
+## **2d. Workflow reference ** {#css_id}  
+The neural network regression code and workflow was burrowed from http://uc-r.github.io/ann_regression.
+
+# **3. Procedural steps:** {#anchor}  
+
+  a. Load data  
+  b. Initial data processing  
+  c. Remove categorical variables and scale numeric data  
+  d. Split data into Training and Testing sets 
+  e. ANN regressions:  
+      i.  Run 1: 1-hidden layer with 1 neuron  
+      ii. Run 2: 2-Hidden Layers, Layer 1: 4-neurons, Layer 2: 1-neuron, logistic activation function  
+      iii.Run 3: 2-Hidden Layers, Layer 1: 4-neurons, Layer 2: 1-neuron, tanh activation
+      iv. Run 4: 1-Hidden Layer, 1-neuron, tanh activation function  
+  f. Compare results - identify run with least test error
+  g. Variable importance plot - Olden function
+
+#### **Load library files:**  
+```{r }
+library(tidyverse)
+library(neuralnet)
+library(GGally)
+library(dplyr)            #For scaling
+library(NeuralNetTools)
+library(nnet)
+library("data.table")               
+```
+
+#### **3a. Read in project data file**
+```{r }
+df1 <- read.csv("US_Univ_UG_shortnames.csv")
+```
+
+#### **3b. Initial data processing**
+```{r }
+#No. of rows with NA for ACTComp is less than SAT scores. So choosing ACT scores as driver (feature). 
+#Remove all rows where ACTComp_25 and ACTComp_75 is NA
+df2 <- df1[!is.na(df1$ACTComp_25)&!is.na(df1$ACTComp_75),]
+
+#Cull columns by name
+#Removed select columns - SAT scores and some identifier info
+df3 <- df2[ , -which(names(df2) %in% c("ID_number", "Name", "Yr", "ZIP", "County", "Longitude",
+                                       "Latitude", "SATRead_25", "SATRead_75", "SATMath_25", 
+                                       "SATMath_75", "SATWrite_25", "SATWrite_75", "Gradrate_5yrs",
+                                       "Gradrate_6yrs"))]
+
+#Label - Graduation rate in 4 yrs
+#Remove all rows where grad rate in 4 yrs is NA
+df3b <- df3[!is.na(df3$Gradrate_4yrs),]
+
+#Remove select columns - with large number of NA values
+#ANN requirement - NA values can't be present in any column
+df3c <- df3b[ , -which(names(df3b) %in% c("P_1stUG_instate", "P_1stUG_outstate", "P_1stUG_foreign", 
+                                          "P_1stUG_resNA"))]
+
+#Remove rows with NA values in any column
+df4 <- df3c[complete.cases(df3c), ]
+nrow(df4) #Rows without NA values = 1151
+
+#Check if any column has NA values
+sapply(df4, function(x) sum(is.na(x)))
+
+```
+#### **Observation:**    
+##### None of the columns have any NAs  
+
+#### **3c. Remove categorical variables and scale numeric data**  
+```{r }
+#Start NN analysis with df5
+df5 <- df4
+
+#NN model uses only numeric features. So removing all categorical features.
+df5 = subset(df4, select = -c(Relgious_y_n, State, Region, Status, HBCU, Urbanization, 
+                              Type_of_univ))
+
+#Before splitting dataset to train and test, I scale each numeric feature in [0,1] interval
+#The scale01() function maps each data observation onto the [0,1] interval
+#Scale numeric columns in a batch
+num_cols = c('Applicants', 'Admission', 'UG1st_Enrolled', 'P_submit_SAT', 'P_submit_ACT'
+             ,'ACTComp_25', 'ACTComp_75', 'P_admit', 'Yield', 'Tuition2010_11', 'Tuition2011_12'
+             ,'Tuition2012_13', 'Tuition2013_14', 'Price_instate_2013_14', 'Price_outstate_2013_14'
+             ,'UG_enroll', 'Grad_enroll', 'FTUG_enroll', 'PTUG_enroll', 'P_Amer_Indian'
+             ,'P_Asian', 'P_Af_American', 'P_Latino', 'P_PIslander', 'P_White', 'P_2orM_races'
+             ,'P_RaceNA', 'P_NRAlien', 'P_Asian_Native_PIslander', 'P_Women', 'Gradrate_4yrs'
+             ,'P_1yrUG_any_aid', 'P_1yrUG_Fed_state_grant', 'P_1yrUG_Fed_grant', 'P_1yrUG_Pell_grant'
+             ,'P_1yrUG_otherFed_grant', 'P_1yrUG_state_local_grant', 'P_1yrUG_institute_grant'
+             ,'P_1yrUG_student_loan', 'P_1yrUG_Fed_student_loan', 'P_1yrUG_other_loan'
+             ,'SB_Endowment_per_FTE')
+
+scale01 <- function(x){
+  (x - min(x)) / (max(x) - min(x))
+}
+
+#Apply scale01 function by calling in the dplyr mutate_all() function.
+df5[,num_cols] <- df5[,num_cols] %>% mutate_all(scale01)
+
+```
+
+#### **3d. Split data into Training and Testing sets**
+```{r }
+#Provide a seed for reproducible results
+#Randomly extract (without replacement) 80% of the observations to build the Training data set.
+set.seed(12345)
+df5_Train <- sample_frac(tbl = df5, replace = FALSE, size = 0.80)
+
+#Use dplyr’s anti_join() function to extract all the observations that are not within the 
+#df5_Train data set to create our test data set i.e., df5_Test
+df5_Test <- anti_join(df5, df5_Train)
+nrow(df5_Train)
+nrow(df5_Test)
+
+```
+
+#### **3e. ANN regressions**
+
+#### **3e(i). Run 1: 1-hidden layer with 1 neuron**
+```{r }
+#Run 1: 1st ANN regression
+#construct a 1-hidden layer ANN with 1 neuron, the simplest of all neural network
+#The df6_NN1 is a list containing all parameters of the regression ANN 
+#and the results of the neural network on the test data set 
+
+#Run NN
+set.seed(12321)
+df6_NN1 <- neuralnet(Gradrate_4yrs ~ Applicants + Admission + UG1st_Enrolled
+                    + P_submit_SAT + P_submit_ACT + ACTComp_25 + ACTComp_75 + P_admit
+                    + Yield + Tuition2010_11 + Tuition2011_12 + Tuition2012_13 + Tuition2013_14
+                    + Price_instate_2013_14 + Price_outstate_2013_14 + UG_enroll + Grad_enroll
+                    + FTUG_enroll + PTUG_enroll + P_Amer_Indian + P_Asian + P_Af_American
+                    + P_Latino + P_PIslander + P_White + P_2orM_races + P_RaceNA + P_NRAlien
+                    + P_Asian_Native_PIslander + P_Women + P_1yrUG_any_aid + P_1yrUG_Fed_state_grant
+                    + P_1yrUG_Fed_grant + P_1yrUG_Pell_grant + P_1yrUG_otherFed_grant
+                    + P_1yrUG_state_local_grant + P_1yrUG_institute_grant + P_1yrUG_student_loan
+                    + P_1yrUG_Fed_student_loan + P_1yrUG_other_loan + SB_Endowment_per_FTE, 
+                    data = df5_Train)
+
+#Convert df5_Train to data table - to calculate SSE
+#install.packages("data.table")           
+df5b_Train <- setDT(df5_Train)
+
+#Manually compute the SSE (sum of squares error)
+#SSE: sum of the squared differences between each observation and its group's mean
+NN1_Train_SSE <- sum((df6_NN1$net.result - df5_Train[, 'Gradrate_4yrs'])^2)/2
+paste("SSE: ", round(NN1_Train_SSE, 4))
+
+#To calculate SSE in test dataset - need to place the label at the last column (to the right) of test data
+df5_Test$Gradrate_4yrs_2 <- df5_Test$Gradrate_4yrs
+
+#Delete Gradrate_4yrs column
+df5_Test = subset(df5_Test, select = -c(Gradrate_4yrs))
+
+#To calculate the test error, I used the neuralnet package compute() function
+#The compute() function outputs the response variable, here the Gradrate_4yrs, as estimated by the NN. 
+#After having the ANN estimated response, NN1_Test_SSE can be computed.
+#1st input of compute() - the desired neural network object created by the neuralnet() function, 
+#2nd argument of compute() - the test data set feature (independent variable(s)) values
+Test_NN1_Output <- compute(df6_NN1, df5_Test[, 1:41])$net.result
+NN1_Test_SSE <- sum((Test_NN1_Output - df5_Test[, 42])^2)/2
+NN1_Test_SSE
+
+```
+
+#### **Observation:**    
+##### Test error = 1.064 while training error = 4.3602. So test error is smaller than training error.
+
+#### **3e(ii). Run 2: 2-Hidden Layers, Layer 1: 4-neurons, Layer 2: 1-neuron, logistic activation function**
+```{r }
+#Modify regression hyper-parameters
+#Run 1 was the most basic of regression ANNs without modifying any of the default 
+#hyperparameters associated with the neuralnet() function. 
+#In the next runs, I try to improve the network by modifying its basic structure and hyperparameters
+#In Run 2, I added depth to the hidden layer of the network to see if this improved the test data set SSE. 
+
+#Run NN
+set.seed(12321)
+df6_NN2 <- neuralnet(Gradrate_4yrs ~ Applicants + Admission + UG1st_Enrolled
+                     + P_submit_SAT + P_submit_ACT + ACTComp_25 + ACTComp_75 + P_admit
+                     + Yield + Tuition2010_11 + Tuition2011_12 + Tuition2012_13 + Tuition2013_14
+                     + Price_instate_2013_14 + Price_outstate_2013_14 + UG_enroll + Grad_enroll
+                     + FTUG_enroll + PTUG_enroll + P_Amer_Indian + P_Asian + P_Af_American
+                     + P_Latino + P_PIslander + P_White + P_2orM_races + P_RaceNA + P_NRAlien
+                     + P_Asian_Native_PIslander + P_Women + P_1yrUG_any_aid + P_1yrUG_Fed_state_grant
+                     + P_1yrUG_Fed_grant + P_1yrUG_Pell_grant + P_1yrUG_otherFed_grant
+                     + P_1yrUG_state_local_grant + P_1yrUG_institute_grant + P_1yrUG_student_loan
+                     + P_1yrUG_Fed_student_loan + P_1yrUG_other_loan + SB_Endowment_per_FTE, 
+                     data = df5_Train, 
+                     hidden = c(4, 1), 
+                     act.fct = "logistic")
+
+## Calculate training Error
+NN2_Train_SSE <- sum((df6_NN2$net.result - df5_Train[, 'Gradrate_4yrs'])^2)/2
+NN2_Train_SSE
+## Calculate test Error
+Test_NN2_Output <- compute(df6_NN2, df5_Test[, 1:41])$net.result
+NN2_Test_SSE <- sum((Test_NN2_Output - df5_Test[, 42])^2)/2
+NN2_Test_SSE
+
+```
+
+#### **Observation:**    
+##### Test error = 2.517 while training error = 2.755. So test error is slightly smaller than training error.
+
+#### **3e(iii). Run 3: 2-Hidden Layers, Layer 1: 4-neurons, Layer 2: 1-neuron, tanh activation**
+```{r }
+#Modify regression hyper-parameters again
+#In Run 3, I changed the activation function from logistic to the tangent hyperbolicus (tanh) to 
+#determine if these modifications can improve the test data set SSE.
+#When using tanh activation function, I need to rescale the data from [0,1] to [−1,1] using the rescale package. 
+
+#Rescale for tanh activation function
+scale11 <- function(x) {
+  (2 * ((x - min(x))/(max(x) - min(x)))) - 1
+}
+
+df5b_Train <- df5_Train %>% mutate_all(scale11)
+df5b_Test <- df5_Test %>% mutate_all(scale11)
+
+# Run NN
+set.seed(12321)
+df6_NN3 <- neuralnet(Gradrate_4yrs ~ Applicants + Admission + UG1st_Enrolled
+                     + P_submit_SAT + P_submit_ACT + ACTComp_25 + ACTComp_75 + P_admit
+                     + Yield + Tuition2010_11 + Tuition2011_12 + Tuition2012_13 + Tuition2013_14
+                     + Price_instate_2013_14 + Price_outstate_2013_14 + UG_enroll + Grad_enroll
+                     + FTUG_enroll + PTUG_enroll + P_Amer_Indian + P_Asian + P_Af_American
+                     + P_Latino + P_PIslander + P_White + P_2orM_races + P_RaceNA + P_NRAlien
+                     + P_Asian_Native_PIslander + P_Women + P_1yrUG_any_aid + P_1yrUG_Fed_state_grant
+                     + P_1yrUG_Fed_grant + P_1yrUG_Pell_grant + P_1yrUG_otherFed_grant
+                     + P_1yrUG_state_local_grant + P_1yrUG_institute_grant + P_1yrUG_student_loan
+                     + P_1yrUG_Fed_student_loan + P_1yrUG_other_loan + SB_Endowment_per_FTE, 
+                     data = df5b_Train, 
+                     hidden = c(4, 1), 
+                     act.fct = "tanh",
+                     stepmax=1e7)   #Needed to avoid convergence problems
+
+## Training Error 
+NN3_Train_SSE <- sum((df6_NN3$net.result - df5b_Train[, 'Gradrate_4yrs'])^2)/2
+NN3_Train_SSE
+## Test Error 
+Test_NN3_Output <- compute(df6_NN3, df5b_Test[, 1:41])$net.result
+NN3_Test_SSE <- sum((Test_NN3_Output - df5b_Test[, 42])^2)/2
+NN3_Test_SSE
+
+```
+
+#### **Observation:**    
+##### Test error = 8.555  while training error = 10.344. 
+
+#### **3e(iv). Run 4: 1-Hidden Layer, 1-neuron, tanh activation function**  
+```{r }
+#Modify regression hyper-parameters again
+
+#Run NN
+set.seed(12321)
+df6_NN4 <- neuralnet(Gradrate_4yrs ~ Applicants + Admission + UG1st_Enrolled
+                     + P_submit_SAT + P_submit_ACT + ACTComp_25 + ACTComp_75 + P_admit
+                     + Yield + Tuition2010_11 + Tuition2011_12 + Tuition2012_13 + Tuition2013_14
+                     + Price_instate_2013_14 + Price_outstate_2013_14 + UG_enroll + Grad_enroll
+                     + FTUG_enroll + PTUG_enroll + P_Amer_Indian + P_Asian + P_Af_American
+                     + P_Latino + P_PIslander + P_White + P_2orM_races + P_RaceNA + P_NRAlien
+                     + P_Asian_Native_PIslander + P_Women + P_1yrUG_any_aid + P_1yrUG_Fed_state_grant
+                     + P_1yrUG_Fed_grant + P_1yrUG_Pell_grant + P_1yrUG_otherFed_grant
+                     + P_1yrUG_state_local_grant + P_1yrUG_institute_grant + P_1yrUG_student_loan
+                     + P_1yrUG_Fed_student_loan + P_1yrUG_other_loan + SB_Endowment_per_FTE, 
+                     data = df5b_Train, 
+                     act.fct = "tanh",
+                     stepmax=1e7)    #Needed to avoid convergence problems
+
+## Calculate training Error
+NN4_Train_SSE <- sum((df6_NN4$net.result - df5b_Train[, 'Gradrate_4yrs'])^2)/2
+NN4_Train_SSE
+## Calculate test Error
+Test_NN4_Output <- compute(df6_NN4, df5b_Test[, 1:41])$net.result
+NN4_Test_SSE <- sum((Test_NN4_Output - df5b_Test[, 42])^2)/2
+NN4_Test_SSE
+
+```
+
+#### **Observation:**    
+##### Test error = 7.218  while training error = 17.361.   
+
+#### **3f. Compare results - identify run with least test error **   
+```{r }
+# Plot of run results - for comparison
+Regression_NN_Errors <- tibble(Network = rep(c("NN1", "NN2", "NN3", "NN4"), each = 2), 
+                               DataSet = rep(c("Train", "Test"), time = 4), 
+                               SSE = c(NN1_Train_SSE, NN1_Test_SSE, 
+                                       NN2_Train_SSE, NN2_Test_SSE,
+                                       NN3_Train_SSE, NN3_Test_SSE,
+                                       NN4_Train_SSE, NN4_Test_SSE))
+
+Regression_NN_Errors %>% 
+  ggplot(aes(Network, SSE, fill = DataSet)) + 
+  geom_col(position = "dodge") + 
+  ggtitle("Regression ANN's SSE")
+
+```
+
+#### **Observation:**    
+##### The lowest error in test data occurs in Run 1.
+
+#### **3g. Variable importance plot - Olden function ** 
+```{r }
+# Plot importance of each variable using garson()
+# The results indicate relative importance as the absolute magnitude from zero to one.
+# Only neural networks with one hidden layer and one output node can be evaluated.
+garson(df6_NN1) +  theme(axis.text.x=element_text(angle=90,hjust=1)) + coord_flip()
+
+# The olden function is an alternative and more flexible approach to evaluate variable importance.
+# An advantage of this approach is the relative contributions of each connection weight are 
+#maintained in terms of both magnitude and sign as compared to Garson's algorithm 
+#which only considers the absolute magnitude.
+# The Olden's algorithm is capable of evaluating neural networks with multiple hidden layers 
+#and response variables. 
+
+#Plot variable importance
+olden(df6_NN1) + theme(axis.text.x=element_text(angle=90,hjust=1)) + coord_flip()
+
+```

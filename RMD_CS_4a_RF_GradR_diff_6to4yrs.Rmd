@@ -1,0 +1,367 @@
+---
+title: "Capstone Project - Part 4a"
+author: "Saibal Bhattacharya"
+date: "9/29/2020"
+output: html_document
+---
+
+# **1. Problem statement:** {#anchor}    
+
+The question that this section of the capstone project attempts to answer is as follows:    
+
+Using Random Forest regression, identify features that affect the increase in graduation rates between 4 and 6 yrs.  
+
+# **2a. Data:** {#anchor}
+The dataset used for this capstone project is publicly available and was downloaded from https://public.tableau.com/en-us/s/resources.  
+
+The original data was compliled by the Integrated Postsecondary Education Data System (IPEDS). IPEDS serves as the primary source for data on colleges, universities, and technical and vocational postsecondary institutions in the United States, and it is part of the National Center for Education Statistics (NCES).  
+
+This dataset pertains to about 1534 US universities and colleges for the year 2013. It includes a host of information regarding insitute name, location (state and geographic region), status (public or private not-for-profit), religiously affiliated (or not), historically black college (or not) and type of degrees offered. It also includes many undergraduate admission statistics (number of applications, admissions, yield), 25th and 75th percentile ACT and SAT scores, percent of freshmen submitting ACT and SAT scores, tuition and fees (from 2010 to 2014), in-state and out-of-state total price of attendance (2013-14),full- and part-time enrollment, ethnic/racial make-up, percent of in-state, out-of-state, international students, college endowment per FTE (full-time equvalent) enrollment, and percent of freshmen receiving various kinds of financial aid - local, federal, and institutional. Additionally, it also includes the graduation rate (for Bachelor's degree) over 4, 5, and 6 years.  
+
+Additionally, this dataset includes some date that are not related to undergraduates such as ethnic/racial makeup of graduate school and total enrollment numbers across the college/university. It also includes some estimated statistics about enrollment for freshmen, undergraduates, graduates, and full- and part-time students.
+
+## **2b. Focus on undergraduate data ** {#css_id}  
+All colleges/universities have undergraduate programs, but graduate programs vary in size and scope across colleges and universities. For this project, I, therefore, decided to focus on answering questions pertaining to the undergraduate program only.  
+
+Thus from the original dataset, I removed all data that didn't focus on undergraudates such as ethinic makeup of graduate programs, ethnic makeup of total enrollment (that included non-undergraduates).I also eliminated estimated enrollment numbers (total, undergraduate, and graduate), since the data base separately included (non-estimated) undergraduate enrollment data. I also excluded the number of degrees and certificates awarded (including Associate, Bachelor, Master's, Doctoral, post baccalaureate, post Master's, and various kinds of certificates) mainly because of large number of zero or missing values for these columns.
+
+## **2c. Focus on ACTComp scores** {#css_id}   
+The original dataset contains ACTComp_75 (75th percentile) and ACTComp_25 (25th percentile), SATMath_75, SATMath_25, SATRead_75, SATRead_25, SATWrite_75, and SATWrite_25. 
+
+The NN algorithm used in this project can't handle missing data (NAs) in any column.Thus, a decision had to made regarding whether to include all or some of these important inputs: ACTComp_75 (334 NAs), ACTComp_25 (334 NAs), SATMath_25 (351 NAs), SATMath_75 (351 NAs), SATRead_25 (364 NAs), SATRead_75 (364 NAs), SATWrite_25 (819 NAs), and SATWrite_75 (819 NAs). It was therefore easy to decide to exclude the SATWrite columns due to large number of NA values.Including ACTComp_75, ACTComp_25, SATMath_25, SATMath_75, SATRead_25, SATRead_75 resulted in 1061 cases while including only ACTComp_75, ACTComp_25 resulted in 1151 cases. The original dataset is a relatively small sample of 1534 cases (with NAs) for NN training and testing purposes. Thus, I decided to include only ACTComp_75, ACTComp_25 so that I could get as big a sample size to train and test. Moreover, ACTComp_25 showed strong linear correlation with SATMath_25 and SATRead_25, and ACTComp_75 showed strong linear correlation with SATMath_75 and SATRead_75.      
+
+## **2d. Workflow reference ** {#css_id}  
+The neural network regression code and workflow was burrowed from https://uc-r.github.io/random_forests#prereq.
+
+# **3. Procedural steps:** {#anchor}  
+
+  a. Load data  
+  b. Initial data processing  
+  c. Split data into Training and Testing sets 
+  d. Random Forest (RF) regressions:  
+      i.  Run 1: Initial RF run with default values  
+      ii. Run 2: Tune mtry (using randomForest::tuneRF)  
+      iii.Run 3: Full grid search with ranger()
+  e. Apply best random forest model on test data
+  f. Variable importance plot 
+
+#### **Load library files:**
+```{r }
+library(rsample)      # data splitting 
+library(randomForest) # basic implementation
+library(ranger)       # a faster implementation of randomForest
+library(caret)        # an aggregator package for performing many machine learning models
+library(h2o)          # an extremely fast java-based platform
+library(AmesHousing)
+library(ggplot2)
+library(dplyr)
+
+```
+
+#### **3a. Read in project data file**
+```{r }
+df1 <- read.csv("US_Univ_UG_shortnames.csv")
+```
+
+#### **3b. Initial data processing**
+```{r }
+#Create new column showing diff in grad rate between 6 and 4 yrs
+df1$Gradrate_diff_6to4yrs <- df1$Gradrate_6yrs - df1$Gradrate_4yrs
+
+#No of rows with NA for ACTComp is less than SAT scores. So choosing ACT scores as driver. 
+#Remove all rows where ACTComp_25 and ACTComp_75 is NA
+df2 <- df1[!is.na(df1$ACTComp_25)&!is.na(df1$ACTComp_75),]
+
+#Cull columns by name
+#Removed select columns - SAT scores and some identifier info
+df3 <- df2[ , -which(names(df2) %in% c("ID_number", "Name", "Yr", "ZIP", "County", "Longitude",
+                                       "Latitude", "SATRead_25", "SATRead_75", "SATMath_25", 
+                                       "SATMath_75", "SATWrite_25", "SATWrite_75", "Gradrate_5yrs",
+                                       "Gradrate_6yrs", "Gradrate_4yrs"))]
+
+#Label - Difference in graduation rate between 6 and 4 yrs
+#Remove all rows where Gradrate_diff_6to4yrs is NA
+df3b <- df3[!is.na(df3$Gradrate_diff_6to4yrs),]
+nrow(df3b) #has 1195 rows
+
+#Remove select columns - with large number of NA values
+#Random forest regression requirement - NA values can't be present in any column
+df3c <- df3b[ , -which(names(df3b) %in% c("P_1stUG_instate", "P_1stUG_outstate", "P_1stUG_foreign", 
+                                          "P_1stUG_resNA"))]
+
+#Remove rows with NA values in any column
+df4 <- df3c[complete.cases(df3c), ]
+nrow(df4) #Rows without NA values = 1151
+
+#Check if any column has NA values
+sapply(df4, function(x) sum(is.na(x)))
+
+```
+
+#### **Observation:**    
+##### None of the columns have any NAs  
+
+#### **3c. Split data into Training and Testing sets** 
+```{r }
+# Create training (70%) and test (30%) sets 
+# Use set.seed for reproducibility
+set.seed(123)
+df4_split <- initial_split(df4, prop = .7)
+df5_train <- training(df4_split)
+df5_test  <- testing(df4_split)
+nrow(df5_train)  
+
+```
+
+#### **Observation:**    
+##### Training set has 806 rows (cases) 
+```{r }
+nrow(df5_test)   
+
+```
+
+#### **Observation:**    
+##### Test set has 345 rows (cases) 
+
+#### **3d: Random Forest (RF) regressions**
+
+#### **3d(i) Run 1: Initial RF run with default values**  
+```{r }
+# for reproduciblity
+set.seed(123)
+
+# default Random Forest model
+m1 <- randomForest(
+  formula = Gradrate_diff_6to4yrs ~ .,
+  data    = df5_train
+)
+
+m1
+```
+
+#### **Observations from Run 1:**    
+##### Mean of squared residuals: 41.83; % Var explained: 47.42
+##### Default number of trees: 500
+##### Default mtry (no. of variables tried at each split) = features/3 = 49/3 = around 16
+##### mtry: the number of variables to randomly sample as candidates at each split.
+
+#### **Plot error rate vs. number of trees**  
+```{r }
+plot(m1)
+
+```
+
+#### **Observation:**    
+##### Above plot shows that error rate stabalizes with around 100 trees, and continues to decrease slowly until around 300 or so trees.  
+
+#### **Find number of trees with lowest error** 
+```{r }
+# Plotted error rate above is based on the OOB (out of box) sample error
+which.min(m1$mse)
+
+```
+
+#### **Observation:**    
+##### 106 trees result in the lowest error
+
+#### **RMSE of this optimal random forest**
+```{r }
+#Optimal random forest model has 106 trees
+sqrt(m1$mse[which.min(m1$mse)])
+
+```
+
+#### **Observation:**    
+##### Average error in predicting difference in graduation rates between 6 and 4 yrs (Gradrate_diff_6to4yrs) = 6.45%
+
+#### **3d(ii) Run 2: Tune mtry (using randomForest::tuneRF)**  
+```{r }
+#Modify handful of tuning parameters to seek improvement in run results.
+#Primary parameter to vary is mtry - number of candidate variables to select from at each split
+#Additional tuning hyperparameters:
+#   ntree: number of trees - want enough trees to stabalize the error 
+#   mtry: the number of variables to randomly sample as candidates at each split. 
+#   sampsize: the number of samples to train on - default is 63.25% of the training set
+#   nodesize: minimum number of samples within the terminal nodes. 
+#   maxnodes: maximum number of terminal nodes.
+
+#Initial tuning of random forest
+#Tune the mtry parameter - use randomForest::tuneRF
+#Start with mtry = 5, increase by 1.5 until the OOB error stops improving by 1%
+
+# names of features
+features <- setdiff(names(df5_train), "Gradrate_diff_6to4yrs")
+
+set.seed(123)
+
+m2 <- tuneRF(
+  x          = df5_train[features],
+  y          = df5_train$Gradrate_diff_6to4yrs,
+  ntreeTry   = 300, #no reduction in error after 300 trees
+  mtryStart  = 5,
+  stepFactor = 1.5,
+  improve    = 0.01,
+  trace      = FALSE      # to not show real-time progress 
+)
+
+m2
+
+```
+
+#### **Observation:**
+##### Min OOB Error (when improve = 0.01) is at mtry = 4
+
+#### **3d(ii) Run 3: Full grid search with ranger() ** 
+```{r }
+#Perform a larger grid search across several hyperparameters 
+#Create a grid and loop through each hyperparameter combination and evaluate the model
+#This is where randomForest becomes quite inefficient since it does not scale well. 
+#Instead, use ranger - it is 6 times faster than randomForest
+
+#To perform the grid search, first construct a grid of hyperparameters. 
+#Search across different models with varying mtry, minimum node size, and sample size.
+#Hyperparameter grid search
+
+hyper_grid <- expand.grid(
+  mtry       = seq(2, 30, by = 4),
+  node_size  = seq(3, 9, by = 2),
+  sampe_size = c(.55, .632, .70, .80),
+  OOB_RMSE   = 0
+)
+
+# total number of combinations
+nrow(hyper_grid)
+
+```
+
+#### **Observation:**
+##### Total models to be run = 128 
+
+#### **Run loops**
+```{r }
+#Loop through each hyperparameter combination and apply 300 trees 
+#(our previous work showed that 300 was plenty to achieve a stable error rate)
+for(i in 1:nrow(hyper_grid)) {
+  
+  # train model
+  model <- ranger(
+    formula         = Gradrate_diff_6to4yrs ~ ., 
+    data            = df5_train, 
+    num.trees       = 300,
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$node_size[i],
+    sample.fraction = hyper_grid$sampe_size[i],
+    seed            = 123
+  )
+  
+  # add OOB error to grid
+  hyper_grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
+}
+
+hyper_grid %>% 
+  dplyr::arrange(OOB_RMSE) %>%
+  head(10)
+
+```
+
+#### **Observation:**
+##### Top 10 performing models - all have RMSE values around 6.37 
+##### Best performing models: node_size = 3-5 observations in terminal node (i.e., with deeper trees), mtry = 14, and sample size = 0.7 
+
+#### **Run best model on training data to estimate range of error rate.**
+```{r }
+#So far, best RF model - retains columnar categorical variables and 
+#uses mtry = 14, terminal node_size of 3 observations, and a sample size of 70%.
+OOB_RMSE <- vector(mode = "numeric", length = 100)
+for(i in seq_along(OOB_RMSE)) {
+  
+  optimal_ranger <- ranger(
+    formula         = Gradrate_diff_6to4yrs ~ ., 
+    data            = df5_train, 
+    num.trees       = 300,
+    mtry            = 14,
+    min.node.size   = 3,
+    sample.fraction = .7,
+    importance      = 'impurity'
+  )
+  
+  OOB_RMSE[i] <- sqrt(optimal_ranger$prediction.error)
+}
+
+#Historgram of range of prediction error (RMSE)
+hist(OOB_RMSE, breaks = 10, xlim = c(6.3,6.5)) 
+
+```
+
+#### **Observation:**
+##### Error ranges between 6.35 - 6.49 with a most likely of 6.42%
+```{r }
+#Range of values for Gradrate_diff_6to4yrs
+hist(df4$Gradrate_diff_6to4yrs, breaks = 10)
+
+```
+
+#### **Observation:**
+##### Most increases in graduation rates (between 4 and 6 yrs) range from 0 to 40 percent
+##### The most frequent error in predicting this graduation rate is around 6.4%.
+
+#### **3e. Apply best random forest model on test data**
+```{r }
+#Try best random forest model on test data
+OOB_RMSE_test <- vector(mode = "numeric", length = 100)
+
+for(i in seq_along(OOB_RMSE_test)) {
+  
+  optimal_ranger <- ranger(
+    formula         = Gradrate_diff_6to4yrs ~ ., 
+    data            = df5_test, 
+    num.trees       = 300,
+    mtry            = 14,
+    min.node.size   = 3,
+    sample.fraction = .7,
+    importance      = 'impurity'
+  )
+  
+  OOB_RMSE_test[i] <- sqrt(optimal_ranger$prediction.error)
+}
+
+hist(OOB_RMSE_test, breaks = 12) #xlim = c(9.6,9.8)
+
+```
+
+#### **Observation:**
+##### Expected error ranges between 6.4 and 6.55% with a most likely of 6.48%.
+
+#### **3f. Plot variable importance**
+```{r }
+#Variable importance measured by decrease in MSE when a variable is used as a node split.
+#The remaining error after a node split is known as node impurity 
+#A variable that reduces this impurity is considered more important
+#Accumulate the reduction in MSE for each variable across all the trees 
+#Variable with the greatest accumulated impact is considered important or impactful
+
+#Extracting variable.importance and converting to data.frame
+df6 <- as.data.frame(optimal_ranger$variable.importance)
+
+#Creating new column containing row names
+df6$names <- rownames(df6)
+
+#Shorten column name optimal_ranger$variable.importance to 'importance'
+df6$importance <- df6$'optimal_ranger$variable.importance'
+
+#Bar plot of variable importance - top 20 in descending order
+df6 %>% 
+  arrange(desc(importance)) %>%
+  slice(1:40) %>%
+  ggplot(., aes(x=reorder(names, importance), y=importance))+
+  geom_bar(stat='identity') + coord_flip()
+
+```
+
+#### **Observations:**
+##### Five most important parameters that affect the increase in graduation rate between 4 and 6 yrs are:
+#####   1. Tuition 2010-11
+#####   2. Tuition 2012-13
+#####   3. Tuition 2011-12
+#####   4. Tuition 2013-14
+#####   5. PTUG_enroll (part time undergraduate enrollment)
