@@ -60,8 +60,10 @@ FINAL NOTE
 RF and NN models are black box models – there are no known (phyics-based) laws that govern the relationship between the multiple input features and the label (here, the increase in graduation rates between 4 and 6 years) or the 4-yr graduation rate. Thus, like in any social science research, it is difficult to establish causality between feature(s) and the label – one can only provide educated guesses as to why certain features rank high on the variable importance plots.
 
 ADDITIONAL DETAILS
+
 The problems statements and my workflow to answer each question are detailed in the file Capstone_Project_details_final.pdf.
 
 REFERENCES:
+
 The neural network regression code and workflow was burrowed from http://uc-r.github.io/ann_regression. The neural network regression code and workflow was burrowed from https://uc-r.github.io/random_forests#prereq. The K-means cluster analysis code and workflow was burrowed from: http://uc-r.github.io/kmeans_clustering#elbow.
 
